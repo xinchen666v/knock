@@ -18,7 +18,7 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("序列化失败: %v", err)
 	}
-	t.Logf("线上传输的样子: %s", data)  // 跑测试时打印出来亲眼看一下！
+	t.Logf("线上传输的样子: %s", data) // 跑测试时打印出来亲眼看一下！
 
 	// 解析回来
 	got, err := Parse(data)
@@ -61,5 +61,30 @@ func TestNilPayload(t *testing.T) {
 	}
 	if string(msg.Payload) != `{}` {
 		t.Errorf("空payload应为{}, got %s", msg.Payload)
+	}
+}
+
+// 测试：ValidQueueID
+func TestValidQueueID(t *testing.T) {
+	valid := []string{
+		"0123456789abcdef0123456789abcdef",
+		"ffffffffffffffffffffffffffffffff",
+	}
+	invalid := []string{
+		"",
+		"short",
+		"0123456789abcdef0123456789abcde",   // 31 chars
+		"0123456789abcdef0123456789abcdef0", // 33 chars
+		"g123456789abcdef0123456789abcdef",  // invalid hex
+	}
+	for _, qid := range valid {
+		if !ValidQueueID(qid) {
+			t.Errorf("Valid queue ID %q rejected", qid)
+		}
+	}
+	for _, qid := range invalid {
+		if ValidQueueID(qid) {
+			t.Errorf("Invalid queue ID %q accepted", qid)
+		}
 	}
 }

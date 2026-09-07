@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	writeWait  = 10 * time.Second  // 单次写操作的超时
-	pongWait   = 60 * time.Second  // 允许对端多久不吭声
-	pingPeriod = 45 * time.Second  // 自己发 ping 的间隔（必须小于 pongWait）
-	maxMsgSize = 64 * 1024         // 单条消息上限 64KB
+	writeWait  = 10 * time.Second // 单次写操作的超时
+	pongWait   = 60 * time.Second // 允许对端多久不吭声
+	pingPeriod = 45 * time.Second // 自己发 ping 的间隔（必须小于 pongWait）
+	maxMsgSize = 64 * 1024        // 单条消息上限 64KB
 )
 
 // Client 代表一条活着的连接

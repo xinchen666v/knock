@@ -92,3 +92,12 @@ func NewID() (string,error){
 }
 
 
+// ValidQueueID 校验 qid 是否为合法的32位小写hex
+func ValidQueueID(qid string) bool {
+	if len(qid) != 32 {
+		return false
+	}
+	_,err := hex.DecodeString(qid)
+	return err == nil
+}
+
