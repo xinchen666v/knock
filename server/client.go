@@ -78,9 +78,9 @@ func (c *Client) readPump(hub *Hub) {
 		// 今天先做最简分发：回一个 PONG，证明双向通了
 		switch env.Type {
 		case protocol.TypePing:
-			c.SendPong()
+			c.SendEnvelope(protocol.TypePong,"","",nil) //就地处理
 		default:
-			c.SendError(protocol.CodeBadRequest, "not implemented yet")
+			hub.Route(c,env) //其他命令排队交给hub
 		}
 	}
 }
@@ -118,22 +118,42 @@ func (c *Client) writePump() {
 // --- 发送辅助方法（唯一允许往 conn 写东西的地方） ---
 
 func (c *Client) SendPong() {
-	env, _ := protocol.NewEnvelope(protocol.TypePong, "", "", nil)
-	if data, err := json.Marshal(env); err == nil {
-		select {
-		case c.send <- data:
-		default: // 队列满了说明写不动了，丢消息保连接
-		}
-	}
+	// env, _ := protocol.NewEnvelope(protocol.TypePong, "", "", nil)
+	// if data, err := json.Marshal(env); err == nil {
+	// 	select {
+	// 	case c.send <- data:
+	// 	default: // 队列满了说明写不动了，丢消息保连接
+	// 	}
+	// }
+	c.SendEnvelope(protocol.TypePong,"","",nil)
 }
 
 func (c *Client) SendError(code int, msg string) {
-	env, _ := protocol.NewEnvelope(protocol.TypeError, "", "",
-		protocol.ErrorMessage{Code: code, Message: msg})
-	if data, err := json.Marshal(env); err == nil {
-		select {
-		case c.send <- data:
-		default:
-		}
+	// env, _ := protocol.NewEnvelope(protocol.TypeError, "", "",
+	// 	protocol.ErrorMessage{Code: code, Message: msg})
+	// if data, err := json.Marshal(env); err == nil {
+	// 	select {
+	// 	case c.send <- data:
+	// 	default:
+	// 	}
+	// }
+	c.SendEnvelope(protocol.TypeError,"","",
+			protocol.ErrorMessage{Code: code, Message: msg})		
+}
+
+
+//所有发送的统一入口
+func (c *Client) SendEnvelope(msgType,qid,mid string,payload any) {
+	env,err := protocol.NewEnvelope(msgType,qid,mid,payload)
+	if err != nil {
+		return 
+	}
+	data,err := json.Marshal(env)
+	if err != nil {
+		return 
+	}
+	select {
+	case c.send <- data:
+	default: //hub不阻塞，满了就丢
 	}
 }
