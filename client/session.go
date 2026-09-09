@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,11 +34,13 @@ type Session struct {
 }
 
 func dial(peer *protocol.Invite) (*websocket.Conn, error) {
-	host, port := "localhost", 8080
+	// host, port := "localhost", 8080
+	host, port := "guru-mat-concern-theatre.trycloudflare.com", 0
 	if peer != nil {
 		host, port = peer.Host, peer.Port
 	}
 	url := buildWSURL(host, port)
+	fmt.Printf("dialing: %s\n", url)
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("连接服务器失败：%w", err)
@@ -79,7 +83,7 @@ func (s *Session) request(env *protocol.Envelope, wantType string) (*protocol.En
 }
 
 // runChat: ①连接 ②建自己队列 ③订阅对方队列 ④进入聊天循环
-func runChat(peerLink string) error {
+func runChat(peerLink string, serverAddr string) error {
 
 	// peer, err := protocol.ParseInvite(peerLink)
 	// if err != nil {
@@ -145,7 +149,11 @@ func runChat(peerLink string) error {
 	}
 
 	// 广播地址：有对方链接就继承；没有就用默认 localhost:8080
-	advHost, advPort := "localhost", 8080
+	// advHost, advPort := "localhost", 8080
+	advHost, advPort := parseAddr(serverAddr) // 无 -server 时 serverAddr 为 ""
+	if serverAddr == "" {                     // 完全没给 → 本地默认
+		advHost, advPort = "localhost", 8080
+	}
 	if peer != nil {
 		advHost, advPort = peer.Host, peer.Port
 	}
@@ -221,6 +229,10 @@ func (s *Session) myInvite() string {
 // }
 
 func buildWSURL(host string, port int) string {
+	if port == 0 {
+		return fmt.Sprintf("wss://%s/ws", host) //云隧道模式：默认 443 + TLS
+	}
+
 	return fmt.Sprintf("ws://%s:%d/ws", host, port)
 }
 
@@ -231,4 +243,18 @@ func mustNewID() string {
 		panic(err) // 随机数失败属于不可恢复环境错误，panic 合理
 	}
 	return id
+}
+
+// parseAddr: "host:port" → (host, port)；无端口 → (host, 0)（隧道模式信号）
+// 完全没给地址时由调用方自己兜底 localhost:8080
+func parseAddr(addr string) (string, int) {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr, 0 // 无端口 → 隧道模式
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return host, 0
+	}
+	return host, port
 }

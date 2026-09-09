@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -31,14 +32,26 @@ func main() {
 		fmt.Println(invite)
 
 	case "chat":
+		// link := ""
+		// if len(os.Args) >= 3 {
+		// 	// fmt.Fprintln(os.Stderr, "用法：knock chat <对方邀请链接>")
+		// 	// os.Exit(1)
+		// 	link = os.Args[2]
+		// }
+		// if err := runChat(link); err != nil {
+		// 	fmt.Fprintf(os.Stderr, "错误：%s", err)
+		// 	os.Exit(1)
+		// }
+		fs := flag.NewFlagSet("chat",flag.ExitOnError)
+		server := fs.String("server","","服务器地址(对方链接会覆盖))")
+		fs.Parse(os.Args[2:])
+
 		link := ""
-		if len(os.Args) >= 3 {
-			// fmt.Fprintln(os.Stderr, "用法：knock chat <对方邀请链接>")
-			// os.Exit(1)
-			link = os.Args[2]
+		if args := fs.Args();len(args) > 0 {
+			link = args[0]
 		}
-		if err := runChat(link); err != nil {
-			fmt.Fprintf(os.Stderr, "错误：%s", err)
+		if err := runChat(link,*server);err != nil {
+			fmt.Fprintf(os.Stderr,"错误：%s\n",err)
 			os.Exit(1)
 		}
 	default:
@@ -85,8 +98,16 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `knock - 端到端加密聊天的 M1 雏形
 
 用法:
-  knock new            创建队列，打印邀请链接
-  knock chat <链接>    解析对方邀请，进入双向聊天
+  knock new  [-server 地址]              创建队列，打印邀请链接后退出
+  knock chat [-server 地址] [对方链接]   进入双向聊天
+
+地址格式:
+  localhost:8080                          本地模式（ws）
+  guru-xxx.trycloudflare.com              隧道模式（无端口即 wss）
+
+示例:
+  knock chat -server my-tunnel.trycloudflare.com
+  knock chat knock://my-tunnel.trycloudflare.com/abcd1234
 `)
 }
 
