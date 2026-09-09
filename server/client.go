@@ -137,6 +137,7 @@ func (c *Client) SendError(code int, msg string) {
 	// 	default:
 	// 	}
 	// }
+	slog.Info("server: error sent", "remote", c.conn.RemoteAddr(), "code", code, "msg", msg)
 	c.SendEnvelope(protocol.TypeError,"","",
 			protocol.ErrorMessage{Code: code, Message: msg})		
 }

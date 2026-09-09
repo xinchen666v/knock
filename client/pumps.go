@@ -14,24 +14,24 @@ import (
 
 // readPump: 网络 → 终端。收到 DELIVER 就打印，PING/PONG 就地处理
 func (s *Session) readPump() {
-	defer func(){
+	defer func() {
 		s.conn.Close()
 		fmt.Println("\n[链接关闭，回车退出]")
 	}()
 
-	s.conn.SetReadLimit(64*1024)
+	s.conn.SetReadLimit(64 * 1024)
 	s.conn.SetReadDeadline(time.Now().Add(pongWait))
-	s.conn.SetPongHandler(func(string) error{
+	s.conn.SetPongHandler(func(string) error {
 		s.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
-	for{
-		_,data,err := s.conn.ReadMessage()
+	for {
+		_, data, err := s.conn.ReadMessage()
 		if err != nil {
 			return
 		}
-		env,err := protocol.Parse(data)
+		env, err := protocol.Parse(data)
 		if err != nil {
 			continue
 		}
@@ -43,6 +43,11 @@ func (s *Session) readPump() {
 			}
 			fmt.Printf("\r\033[K[%s] %s\n> ", s.nick, chat.Text) // \033[K 清掉当前输入行，体验细节
 			fmt.Print("> ")
+		case protocol.TypeError:
+			var em protocol.ErrorMessage
+			if err := env.DecodePayload(&em); err == nil {
+				fmt.Printf("\r\033[K[错误 %d] %s\n> ", em.Code, em.Message)
+			}
 		default:
 			// 其他类型忽略
 		}
@@ -52,23 +57,23 @@ func (s *Session) readPump() {
 // writePump: 和服务器的版本同构——send channel 的唯一消费者
 func (s *Session) writePump() {
 	ticker := time.NewTicker(pingPeriod)
-	defer func(){
+	defer func() {
 		ticker.Stop()
 		s.conn.Close()
 	}()
 	for {
 		select {
-		case msg,ok := <-s.send:
+		case msg, ok := <-s.send:
 			s.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				return
 			}
-			if err := s.conn.WriteMessage(websocket.TextMessage,msg);err != nil {
+			if err := s.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				return
 			}
 		case <-ticker.C:
 			s.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := s.conn.WriteMessage(websocket.PingMessage,nil);err != nil {
+			if err := s.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
 		}
@@ -91,7 +96,7 @@ func (s *Session) stdinLoop() {
 			return
 		}
 		mid, _ := protocol.NewID()
-		env, _ := protocol.NewEnvelope(protocol.TypeSend, s.peerQID, mid,
+		env, _ := protocol.NewEnvelope(protocol.TypeSend, s.outbox, mid,
 			protocol.ChatMessage{Text: text})
 		if data, err := json.Marshal(env); err == nil {
 			select {

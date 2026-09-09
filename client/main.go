@@ -31,11 +31,13 @@ func main() {
 		fmt.Println(invite)
 
 	case "chat":
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "用法：knock chat <对方邀请链接>")
-			os.Exit(1)
+		link := ""
+		if len(os.Args) >= 3 {
+			// fmt.Fprintln(os.Stderr, "用法：knock chat <对方邀请链接>")
+			// os.Exit(1)
+			link = os.Args[2]
 		}
-		if err := runChat(os.Args[2]); err != nil {
+		if err := runChat(link); err != nil {
 			fmt.Fprintf(os.Stderr, "错误：%s", err)
 			os.Exit(1)
 		}
@@ -55,7 +57,7 @@ func runNew(addr string) (string, error) {
 		addr = "localhost:8080"
 	}
 	invite := &protocol.Invite{Host: hostOf(addr), Port: portOf(addr), QueueID: "placeholder"}
-	conn, err := dial(invite.Host, invite.Port)
+	conn, err := dial(invite)
 	if err != nil {
 		return "", err
 	}
