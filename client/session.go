@@ -33,12 +33,22 @@ type Session struct {
 	nick string //对方链接的host，用来区分聊天中谁在说话
 }
 
-func dial(peer *protocol.Invite) (*websocket.Conn, error) {
-	// host, port := "localhost", 8080
-	host, port := "guru-mat-concern-theatre.trycloudflare.com", 0
-	if peer != nil {
-		host, port = peer.Host, peer.Port
-	}
+// func dial(peer *protocol.Invite) (*websocket.Conn, error) {
+// 	// host, port := "localhost", 8080
+// 	host, port := "guru-mat-concern-theatre.trycloudflare.com", 0
+// 	if peer != nil {
+// 		host, port = peer.Host, peer.Port
+// 	}
+// 	url := buildWSURL(host, port)
+// 	fmt.Printf("dialing: %s\n", url)
+// 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("连接服务器失败：%w", err)
+// 	}
+// 	return conn, nil
+// }
+
+func dialAddr(host string, port int) (*websocket.Conn, error) {
 	url := buildWSURL(host, port)
 	fmt.Printf("dialing: %s\n", url)
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
@@ -47,6 +57,7 @@ func dial(peer *protocol.Invite) (*websocket.Conn, error) {
 	}
 	return conn, nil
 }
+
 
 // request 串行地发一条命令并等待指定应答（启动阶段专用）
 func (s *Session) request(env *protocol.Envelope, wantType string) (*protocol.Envelope, error) {
@@ -142,18 +153,23 @@ func runChat(peerLink string, serverAddr string) error {
 		}
 		peer = p
 	}
+	// ② 确定服务器地址：优先用对方链接里的；否则用 -server 参数
+	advHost, advPort := parseAddr(serverAddr) // "host:port" → (host, port)；无端口 → (host, 0)
+	if peer != nil {
+		advHost, advPort = peer.Host, peer.Port
+	}
 
-	conn, err := dial(peer) // 见下方 dial 的调整
+	conn, err := dialAddr(advHost,advPort) // 见下方 dial 的调整
 	if err != nil {
 		return err
 	}
 
-	// 广播地址：有对方链接就继承；没有就用默认 localhost:8080
-	// advHost, advPort := "localhost", 8080
-	advHost, advPort := parseAddr(serverAddr) // 无 -server 时 serverAddr 为 ""
-	if serverAddr == "" {                     // 完全没给 → 本地默认
-		advHost, advPort = "localhost", 8080
-	}
+	// // 广播地址：有对方链接就继承；没有就用默认 localhost:8080
+	// // advHost, advPort := "localhost", 8080
+	// advHost, advPort := parseAddr(serverAddr) // 无 -server 时 serverAddr 为 ""
+	// if serverAddr == "" {                     // 完全没给 → 本地默认
+	// 	advHost, advPort = "localhost", 8080
+	// }
 	if peer != nil {
 		advHost, advPort = peer.Host, peer.Port
 	}

@@ -70,7 +70,7 @@ func runNew(addr string) (string, error) {
 		addr = "localhost:8080"
 	}
 	invite := &protocol.Invite{Host: hostOf(addr), Port: portOf(addr), QueueID: "placeholder"}
-	conn, err := dial(invite)
+	conn, err := dialAddr(invite.Host,invite.Port)
 	if err != nil {
 		return "", err
 	}
