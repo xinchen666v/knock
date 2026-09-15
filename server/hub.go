@@ -146,10 +146,16 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 			from.SendError(protocol.CodeQueueNotFound, "queue not found")
 			return
 		}
-		if qs.owner != from {
-			from.SendError(403,"only queue owner may send")
-			return
-		}
+		
+		//M1 它没问题，M2 它会杀死系统。推演：服务器重启 → 内存 map 清空 → B 用老链接 SUB → 内存里没有，
+		//从 DB 复活 → 复活出来的 queueState 里 owner 是 nil → A 发消息 → qs.owner != from → 403。
+		//持久化等于是白做了——owner 绑在连接上，而连接是所有状态里最短命的
+
+		// if qs.owner != from {
+		// 	from.SendError(403,"only queue owner may send")
+		// 	return
+		// }
+
 		if qs.sub == nil {
 			// 新的、更友好的错误：队列在，但对方还没订阅（可能还没粘贴你的链接）
 			from.SendError(503, "queue has no subscriber yet")

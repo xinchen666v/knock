@@ -94,3 +94,68 @@ func (s *Store) CreateQueue(qid string,now int64) error {
 	}
 	return nil 
 } 
+
+// QueueExists 队列是否存在——404 判定的唯一依据（Step 2 起替代内存 map）
+func (s *Store) QueueExists(qid string) (bool,error) {
+	var one int 
+	err := s.db.QueryRow(`SELECT 1 FROM queues WHERE qid = ?`,qid).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false,nil
+	}
+	if err != nil {
+		return false,fmt.Errorf("queue exists: %w",err)
+	}
+	return true,nil
+}
+
+
+// SaveMessage 落一条消息。mid 是主键，重复 mid 会报错——
+// 这是数据库级的去重保险，比应用层去重更硬。
+func (s *Store) SaveMessage(m StoredMessage) error {
+	_, err := s.db.Exec(
+		`INSERT INTO messages (mid, qid, payload, ts) VALUES (?, ?, ?, ?)`,
+		m.Mid, m.QID, m.Payload, m.TS)
+	if err != nil {
+		return fmt.Errorf("save message: %w", err)
+	}
+	return nil
+}
+
+
+// Undelivered 某队列未投递的消息，按时间升序——补投顺序的保证。
+// ORDER BY ts 相同则按 rowid（插入序）稳定排序。
+func (s *Store) Undelivered(qid string) ([]StoredMessage,error) {
+	rows,err := s.db.Query(`
+		SELECT mid, qid, payload, ts FROM messages
+		WHERE qid = ? AND delivered = 0
+		ORDER BY ts, rowid`,qid)
+	if err != nil {
+		return nil,fmt.Errorf("undelivered: %w",err)
+	}
+	defer rows.Close()
+
+	var out []StoredMessage
+	for rows.Next() {
+		var m StoredMessage
+		if err := rows.Scan(&m.Mid,&m.QID,&m.Payload,&m.TS); err != nil {
+			return nil,fmt.Errorf("scan message: %w",err)
+		}
+		out = append(out,m)
+	}
+	return out,rows.Err()
+}
+
+
+// MarkDelivered 投递完成打标。不删行——ACK 丢失时重投靠它兜底，
+// 清理交给后面的 cleanupLoop（M2 收尾的甜点）。
+func (s *Store) MarkDelivered(mid string) error{
+	_,err := s.db.Exec(
+		`UPDATE messages SET delivered = 1, delivered_at = strftime('%s','now')
+		 WHERE mid = ?`, mid)
+	if err != nil {
+		return fmt.Errorf("mark delivered: %w",err)
+	}
+	return nil
+}
+
+
