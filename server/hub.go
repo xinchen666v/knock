@@ -165,6 +165,13 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 		if qs.sub != nil && qs.sub != from { // 只踢“前任接收者”，永远不碰 owner
 			h.kick(qs.sub)
 		}
+
+		//先补投、后 SubOk
+		//这样客户端视角是“SUB 应答回来时，历史消息已经在路上了”
+		// 正常收发循环启动时不会和补投交错产生竞态。
+		//（客户端 request-response 模式是在等 SUB_OK，补投消息会先排进 send channel，
+		// 但客户端收件循环只认 DELIVER，SUB_OK 还没到它还在等应答——两边各自串行，安全。）
+		h.replayOffline(qs,qid)
 		qs.sub = from
 		from.SendEnvelope(protocol.TypeSubOk, qid, "", nil)
 
@@ -265,4 +272,33 @@ func (h *Hub) kick(c *Client) {
 	}
 	delete(h.clients, c)
 	close(c.send)
+}
+
+// replayOffline：SUB 成功后补投该队列未投递的消息。
+// 仍然只被 Run goroutine 调用，和 handle 其他分支一样串行安全
+func (h *Hub) replayOffline(qs *queueState,qid string) {
+	msgs,err := h.store.Undelivered(qid)
+	if err != nil {
+		slog.Error("hub: replay query failed","qid",shortID(qid),"err",err)
+		return
+	}
+	if len(msgs) == 0 {
+		return
+	}
+	slog.Info("hub: replaying","qid",shortID(qid),"count",len(msgs))
+	for _,m := range msgs {
+		qs.sub.SendEnvelope(protocol.TypeDeliver,qid,m.Mid,json.RawMessage(m.Payload))
+	}
+	// 注意：这里【不】MarkDelivered！
+	// 要等客户端 ACK 回来才打标（case TypeAck 里已接好）。
+	// 如果在这里就打标，客户端断线时这批消息就永久丢失了——
+	// 又回到 M1 的"fire and forget"，持久化白做
+}
+
+// shortID 防御性截断，qid 异常短也不 panic
+func shortID(qid string) string {
+	if len(qid) > 8 {
+		return qid[:8] + "..."
+	}
+	return qid
 }

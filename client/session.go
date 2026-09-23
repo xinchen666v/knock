@@ -58,7 +58,6 @@ func dialAddr(host string, port int) (*websocket.Conn, error) {
 	return conn, nil
 }
 
-
 // request 串行地发一条命令并等待指定应答（启动阶段专用）
 func (s *Session) request(env *protocol.Envelope, wantType string) (*protocol.Envelope, error) {
 	data, err := json.Marshal(env)
@@ -159,7 +158,7 @@ func runChat(peerLink string, serverAddr string) error {
 		advHost, advPort = peer.Host, peer.Port
 	}
 
-	conn, err := dialAddr(advHost,advPort) // 见下方 dial 的调整
+	conn, err := dialAddr(advHost, advPort) // 见下方 dial 的调整
 	if err != nil {
 		return err
 	}
