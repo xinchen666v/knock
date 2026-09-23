@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"log/slog"
+	"time"
 
 	"github.com/xinchen666v/knock/protocol"
 )
@@ -21,6 +22,7 @@ type queueState struct {
 // Hub 管理连接注册表和队列路由表。
 // 所有状态只被 Run 这个 goroutine 触碰——没有锁。
 type Hub struct {
+	store      *Store
 	register   chan *Client
 	unregister chan *Client
 	route      chan routed
@@ -30,8 +32,9 @@ type Hub struct {
 	queues map[string]*queueState
 }
 
-func NewHub() *Hub {
+func NewHub(store *Store) *Hub {
 	return &Hub{
+		store:      store,
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		route:      make(chan routed),
@@ -78,14 +81,21 @@ func (h *Hub) Run() {
 //			}
 //		}
 //	}
+
+// M2:releaseQueue：清内存不清 DB。队列消亡语义正式作废
 func (h *Hub) releaseQueue(c *Client) {
 	for qid, qs := range h.queues {
 		if qs.owner == c {
-			delete(h.queues, qid) // 主人走了，队列消亡（M1语义）
-			slog.Info("hub: queue released", "qid", qid[:8]+"...")
+			// delete(h.queues, qid) // 主人走了，队列消亡（M1语义）
+			// slog.Info("hub: queue released", "qid", qid[:8]+"...")
+			qs.owner = nil
+			slog.Info("hub: owner left", "qid", qid[:8]+"...")
 		} else if qs.sub == c {
 			qs.sub = nil // 接收者走了，队列退回待订阅
 			slog.Info("hub: subscriber left", "qid", qid[:8]+"...")
+		}
+		if qs.owner == nil && qs.sub == nil {
+			delete(h.queues, qid) // 只清内存；DB 里的队列和消息继续活着
 		}
 	}
 }
@@ -100,6 +110,10 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 			from.SendError(500, "internal error")
 			return
 		}
+		if err := h.store.CreateQueue(qid, time.Now().Unix()); err != nil {
+			from.SendError(500, "storage error")
+			return
+		}
 		h.queues[qid] = &queueState{owner: from}
 		// from.SendEnvelope(protocol.TypeNewOk, qid, "",
 		// 	protocol.NewOkMessage{QueueID: qid})
@@ -112,10 +126,28 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 			from.SendError(protocol.CodeBadRequest, "invalid queue id")
 			return
 		}
-		//不存在的qid回404，不假装成功
-		if _, ok := h.queues[qid]; !ok {
-			from.SendError(protocol.CodeQueueNotFound, "queue not found")
-			return
+		// //不存在的qid回404，不假装成功
+		// if _, ok := h.queues[qid]; !ok {
+		// 	from.SendError(protocol.CodeQueueNotFound, "queue not found")
+		// 	return
+		// }
+
+		qs, ok := h.queues[qid]
+		if !ok {
+			exists, err := h.store.QueueExists(qid)
+			if err != nil {
+				from.SendError(500, "storage error")
+				return
+			}
+			if !exists {
+				from.SendError(protocol.CodeQueueNotFound, "queue not found")
+				return
+			}
+			// 从 DB 复活内存条目。owner 为 nil：创建者可能离线、
+			// 甚至服务器重启过——capability 模型下这不影响授权
+			qs = &queueState{}
+			h.queues[qid] = qs
+			slog.Info("hub: queue revived from db", "qid", qid[:8]+"...")
 		}
 
 		//单订阅者，踢掉旧的
@@ -128,7 +160,8 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 		// }
 		// from.SendEnvelope(protocol.TypeSubOk, qid, "", nil)
 		// slog.Info("hub: subscriber", "qid", qid[:8]+"...")
-		qs := h.queues[qid]
+		// qs := h.queues[qid]
+
 		if qs.sub != nil && qs.sub != from { // 只踢“前任接收者”，永远不碰 owner
 			h.kick(qs.sub)
 		}
@@ -142,11 +175,24 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 			return
 		}
 		qs, ok := h.queues[qid]
+		// if !ok {
+		// 	from.SendError(protocol.CodeQueueNotFound, "queue not found")
+		// 	return
+		// }
 		if !ok {
-			from.SendError(protocol.CodeQueueNotFound, "queue not found")
-			return
+			exists, err := h.store.QueueExists(qid)
+			if err != nil {
+				from.SendError(500, "storage error")
+				return
+			}
+			if !exists {
+				from.SendError(protocol.CodeQueueNotFound, "queue not found")
+				return
+			}
+			qs = &queueState{}
+			h.queues[qid] = qs
 		}
-		
+
 		//M1 它没问题，M2 它会杀死系统。推演：服务器重启 → 内存 map 清空 → B 用老链接 SUB → 内存里没有，
 		//从 DB 复活 → 复活出来的 queueState 里 owner 是 nil → A 发消息 → qs.owner != from → 403。
 		//持久化等于是白做了——owner 绑在连接上，而连接是所有状态里最短命的
@@ -156,23 +202,50 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 		// 	return
 		// }
 
-		if qs.sub == nil {
-			// 新的、更友好的错误：队列在，但对方还没订阅（可能还没粘贴你的链接）
-			from.SendError(503, "queue has no subscriber yet")
-			return
-		}
+		// if qs.sub == nil {
+		// 	// 新的、更友好的错误：队列在，但对方还没订阅（可能还没粘贴你的链接）
+		// 	from.SendError(503, "queue has no subscriber yet")
+		// 	return
+		// }
+		// mid := env.MsgID
+		// if mid == "" {
+		// 	// 客户端没有mid就在服务器补一个，去重要用到这个
+		// 	mid, _ = protocol.NewID()
+		// }
+		// // 关键：服务器重建信封，只透传payload。客户端无权伪造信封字段
+		// // sub.SendEnvelope(protocol.TypeDeliver, qid, mid, json.RawMessage(env.Payload))
+		// slog.Info("hub: delivered", "qid", qid[:8]+"...", "mid", mid[:8]+"...")
+		// qs.sub.SendEnvelope(protocol.TypeDeliver, qid, mid, json.RawMessage(env.Payload))
+
 		mid := env.MsgID
 		if mid == "" {
-			// 客户端没有mid就在服务器补一个，去重要用到这个
 			mid, _ = protocol.NewID()
 		}
-		// 关键：服务器重建信封，只透传payload。客户端无权伪造信封字段
-		// sub.SendEnvelope(protocol.TypeDeliver, qid, mid, json.RawMessage(env.Payload))
-		slog.Info("hub: delivered", "qid", qid[:8]+"...", "mid", mid[:8]+"...")
-		qs.sub.SendEnvelope(protocol.TypeDeliver, qid, mid, json.RawMessage(env.Payload))
+		// 无条件落库：DB 是真相源。在线投递的消息也先落库，
+		// ACK 丢失时 Step 3 的重投才有底可查
+		if err := h.store.SaveMessage(StoredMessage{
+			Mid:     mid,
+			QID:     qid,
+			Payload: string(env.Payload),
+			TS:      time.Now().Unix(), //服务器接收时间，排序才可信
+		}); err != nil {
+			from.SendError(500, "storage error")
+			return
+		}
+
+		if qs.sub != nil {
+			qs.sub.SendEnvelope(protocol.TypeDeliver, qid, mid, json.RawMessage(env.Payload))
+			slog.Info("hub: delivered online", "qid", qid[:8]+"...", "mid", mid[:8]+"...")
+		} else {
+			slog.Info("hub: queued offline", "qid", qid[:8]+"...", "mid", mid[:8]+"...")
+		}
+		from.SendEnvelope(protocol.TypeAck, qid, mid, protocol.AckMessage{MsgID: mid})
 
 	case protocol.TypeAck:
 		// M1：无持久化，无物可删，仅记录。M2 加SQLite后这里触发 DELETE
+		if err := h.store.MarkDelivered(env.MsgID); err != nil {
+			slog.Error("hub: mark delivered failed", "mid", env.MsgID[:8]+"...", "err", err)
+		}
 		slog.Info("hub: acked", "qid", env.QueueID[:8]+"...", "mid", env.MsgID[:8]+"...")
 
 	default:
