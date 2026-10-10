@@ -90,9 +90,11 @@ func (h *Hub) releaseQueue(c *Client) {
 			// slog.Info("hub: queue released", "qid", qid[:8]+"...")
 			qs.owner = nil
 			slog.Info("hub: owner left", "qid", qid[:8]+"...")
-		} else if qs.sub == c {
+		}
+		if qs.sub == c { //else if -> if
 			qs.sub = nil // 接收者走了，队列退回待订阅
 			slog.Info("hub: subscriber left", "qid", qid[:8]+"...")
+
 		}
 		if qs.owner == nil && qs.sub == nil {
 			delete(h.queues, qid) // 只清内存；DB 里的队列和消息继续活着
@@ -104,6 +106,11 @@ func (h *Hub) releaseQueue(c *Client) {
 func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 	switch env.Type {
 	case protocol.TypeNew:
+		if env.QueueID != "" {
+			from.SendError(protocol.CodeBadRequest, "NEW must not carry a queue id")
+			return
+		}
+
 		// 创建队列：分配随机qid,创建者成为队列主人
 		qid, err := protocol.NewID()
 		if err != nil {
@@ -126,6 +133,7 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 			from.SendError(protocol.CodeBadRequest, "invalid queue id")
 			return
 		}
+
 		// //不存在的qid回404，不假装成功
 		// if _, ok := h.queues[qid]; !ok {
 		// 	from.SendError(protocol.CodeQueueNotFound, "queue not found")
@@ -150,6 +158,12 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 			slog.Info("hub: queue revived from db", "qid", qid[:8]+"...")
 		}
 
+		//防止链接自己
+		if qs.owner == from {
+			from.SendError(protocol.CodeBadRequest, "cannot subscribe your own queue")
+			return
+		}
+
 		//单订阅者，踢掉旧的
 		// if old, ok := h.queues[qid]; ok && old != from {
 		// 	h.queues[qid] = from
@@ -171,9 +185,10 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 		// 正常收发循环启动时不会和补投交错产生竞态。
 		//（客户端 request-response 模式是在等 SUB_OK，补投消息会先排进 send channel，
 		// 但客户端收件循环只认 DELIVER，SUB_OK 还没到它还在等应答——两边各自串行，安全。）
-		h.replayOffline(qs,qid)
-		qs.sub = from
-		from.SendEnvelope(protocol.TypeSubOk, qid, "", nil)
+
+		qs.sub = from                                       //先占位
+		from.SendEnvelope(protocol.TypeSubOk, qid, "", nil) //再应答
+		h.replayOffline(from, qid)                          //传from，不是qs.sub
 
 	case protocol.TypeSend:
 		qid := env.QueueID
@@ -276,18 +291,18 @@ func (h *Hub) kick(c *Client) {
 
 // replayOffline：SUB 成功后补投该队列未投递的消息。
 // 仍然只被 Run goroutine 调用，和 handle 其他分支一样串行安全
-func (h *Hub) replayOffline(qs *queueState,qid string) {
-	msgs,err := h.store.Undelivered(qid)
+func (h *Hub) replayOffline(c *Client, qid string) {
+	msgs, err := h.store.Undelivered(qid)
 	if err != nil {
-		slog.Error("hub: replay query failed","qid",shortID(qid),"err",err)
+		slog.Error("hub: replay query failed", "qid", shortID(qid), "err", err)
 		return
 	}
 	if len(msgs) == 0 {
 		return
 	}
-	slog.Info("hub: replaying","qid",shortID(qid),"count",len(msgs))
-	for _,m := range msgs {
-		qs.sub.SendEnvelope(protocol.TypeDeliver,qid,m.Mid,json.RawMessage(m.Payload))
+	slog.Info("hub: replaying", "qid", shortID(qid), "count", len(msgs))
+	for _, m := range msgs {
+		c.SendEnvelope(protocol.TypeDeliver, qid, m.Mid, json.RawMessage(m.Payload))
 	}
 	// 注意：这里【不】MarkDelivered！
 	// 要等客户端 ACK 回来才打标（case TypeAck 里已接好）。

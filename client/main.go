@@ -3,9 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net"
 	"os"
-	"strconv"
 
 	"github.com/xinchen666v/knock/protocol"
 )
@@ -42,16 +40,17 @@ func main() {
 		// 	fmt.Fprintf(os.Stderr, "错误：%s", err)
 		// 	os.Exit(1)
 		// }
-		fs := flag.NewFlagSet("chat",flag.ExitOnError)
-		server := fs.String("server","","服务器地址(对方链接会覆盖))")
+		fs := flag.NewFlagSet("chat", flag.ExitOnError)
+		server := fs.String("server", "", "服务器地址(对方链接会覆盖))")
+		queue := fs.String("queue", "", "复用自己的旧队列qid（离线消息入口）")
 		fs.Parse(os.Args[2:])
 
 		link := ""
-		if args := fs.Args();len(args) > 0 {
+		if args := fs.Args(); len(args) > 0 {
 			link = args[0]
 		}
-		if err := runChat(link,*server);err != nil {
-			fmt.Fprintf(os.Stderr,"错误：%s\n",err)
+		if err := runChat(link, *server, *queue); err != nil {
+			fmt.Fprintf(os.Stderr, "错误：%s\n", err)
 			os.Exit(1)
 		}
 	default:
@@ -69,8 +68,12 @@ func runNew(addr string) (string, error) {
 	if addr == "" {
 		addr = "localhost:8080"
 	}
-	invite := &protocol.Invite{Host: hostOf(addr), Port: portOf(addr), QueueID: "placeholder"}
-	conn, err := dialAddr(invite.Host,invite.Port)
+	// invite := &protocol.Invite{Host: hostOf(addr), Port: portOf(addr), QueueID: "placeholder"}
+	// conn, err := dialAddr(invite.Host, invite.Port)
+
+	host, port := parseAddr(addr) // 统一用 parseAddr：无端口 → 0 → wss
+	conn, err := dialAddr(host, port)
+
 	if err != nil {
 		return "", err
 	}
@@ -90,7 +93,8 @@ func runNew(addr string) (string, error) {
 	var okMsg protocol.NewOkMessage
 	resp.DecodePayload(&okMsg)
 
-	out := &protocol.Invite{Host: hostOf(addr), Port: portOf(addr), QueueID: okMsg.QueueID}
+	// out := &protocol.Invite{Host: hostOf(addr), Port: portOf(addr), QueueID: okMsg.QueueID}
+	out := &protocol.Invite{Host: host, Port: port, QueueID: okMsg.QueueID}
 	return out.String(), nil
 }
 
@@ -109,25 +113,4 @@ func usage() {
   knock chat -server my-tunnel.trycloudflare.com
   knock chat knock://my-tunnel.trycloudflare.com/abcd1234
 `)
-}
-
-// hostOf/portOf: 把 "192.168.1.5:8080" 拆开；无端口时默认 8080
-func hostOf(addr string) string {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr // 没有端口部分，整个就是host
-	}
-	return host
-}
-
-func portOf(addr string) int {
-	_, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		return 8080
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 1 || port > 65535 {
-		return 8080
-	}
-	return port
 }

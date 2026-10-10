@@ -37,12 +37,26 @@ func (s *Session) readPump() {
 		}
 		switch env.Type {
 		case protocol.TypeDeliver:
+			// ① 去重：ACK 丢失时服务器会重投，已显示过的直接跳过
+			if s.seen[env.MsgID] {
+				continue
+			}
+			s.seen[env.MsgID] = true
+
 			var chat protocol.ChatMessage
 			if err := env.DecodePayload(&chat); err != nil {
 				continue
 			}
 			fmt.Printf("\r\033[K[%s] %s\n> ", s.nick, chat.Text) // \033[K 清掉当前输入行，体验细节
 			fmt.Print("> ")
+
+			// ② 签收：必须走 s.send（写泵是唯一合法写者），必须阻塞发送——
+			//    ACK 丢了服务器就永远重投，宁等勿丢
+			ack,_ := protocol.NewEnvelope(protocol.TypeAck,env.QueueID,env.MsgID,protocol.AckMessage{MsgID:env.MsgID})
+			if data,err := json.Marshal(ack);err == nil{
+				s.send <- data
+			}
+
 		case protocol.TypeError:
 			var em protocol.ErrorMessage
 			if err := env.DecodePayload(&em); err == nil {

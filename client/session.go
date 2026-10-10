@@ -31,6 +31,7 @@ type Session struct {
 	advPort int
 
 	nick string //对方链接的host，用来区分聊天中谁在说话
+	seen map[string]bool
 }
 
 // func dial(peer *protocol.Invite) (*websocket.Conn, error) {
@@ -93,7 +94,7 @@ func (s *Session) request(env *protocol.Envelope, wantType string) (*protocol.En
 }
 
 // runChat: ①连接 ②建自己队列 ③订阅对方队列 ④进入聊天循环
-func runChat(peerLink string, serverAddr string) error {
+func runChat(peerLink string, serverAddr string, myQueue string) error {
 
 	// peer, err := protocol.ParseInvite(peerLink)
 	// if err != nil {
@@ -153,9 +154,13 @@ func runChat(peerLink string, serverAddr string) error {
 		peer = p
 	}
 	// ② 确定服务器地址：优先用对方链接里的；否则用 -server 参数
+	// 服务器地址三层优先级：对方链接 > -server 参数 > 本地默认
 	advHost, advPort := parseAddr(serverAddr) // "host:port" → (host, port)；无端口 → (host, 0)
+	if serverAddr == "" {
+		advHost, advPort = "localhost", 8080 // 完全没配 → 本地开发默认
+	}
 	if peer != nil {
-		advHost, advPort = peer.Host, peer.Port
+		advHost, advPort = peer.Host, peer.Port // 对方链接最高优先级
 	}
 
 	conn, err := dialAddr(advHost, advPort) // 见下方 dial 的调整
@@ -179,17 +184,25 @@ func runChat(peerLink string, serverAddr string) error {
 		advHost: advHost,
 		advPort: advPort,
 		nick:    advHost,
+		seen:    make(map[string]bool),
 	}
 
-	// ① 先建自己的队列（两种模式都先做这件事）
-	env, _ := protocol.NewEnvelope(protocol.TypeNew, mustNewID(), "", nil)
-	resp, err := s.request(env, protocol.TypeNewOk)
-	if err != nil {
-		return err
+	// 建队列，给了-queue就复用旧的，否则NEW
+	if myQueue != "" {
+		s.outbox = myQueue
+		// 不 SUB 自己的 outbox，服务器无需确认——
+		// 队列早在上次 NEW 时落库了，这就是复用的底气
+	} else {
+		// 建自己的队列（两种模式都先做这件事）
+		env, _ := protocol.NewEnvelope(protocol.TypeNew, "", "", nil)
+		resp, err := s.request(env, protocol.TypeNewOk)
+		if err != nil {
+			return err
+		}
+		var okMsg protocol.NewOkMessage
+		resp.DecodePayload(&okMsg)
+		s.outbox = okMsg.QueueID
 	}
-	var okMsg protocol.NewOkMessage
-	resp.DecodePayload(&okMsg)
-	s.outbox = okMsg.QueueID
 
 	// ② 打印自己的邀请——此刻就可以发给对方了
 	fmt.Printf("═══ knock ═══\n")
@@ -212,7 +225,7 @@ func runChat(peerLink string, serverAddr string) error {
 	}
 
 	// ④ 订阅对方队列
-	env, _ = protocol.NewEnvelope(protocol.TypeSub, peer.QueueID, "", nil)
+	env, _ := protocol.NewEnvelope(protocol.TypeSub, peer.QueueID, "", nil)
 	if _, err := s.request(env, protocol.TypeSubOk); err != nil {
 		return err
 	}
@@ -260,8 +273,10 @@ func mustNewID() string {
 	return id
 }
 
+
 // parseAddr: "host:port" → (host, port)；无端口 → (host, 0)（隧道模式信号）
-// 完全没给地址时由调用方自己兜底 localhost:8080
+// 注意：空串会返回 ("", 0)——调用方必须在调用前处理"完全没给地址"的
+// 情况，兜底 localhost:8080，不能依赖本函数
 func parseAddr(addr string) (string, int) {
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
