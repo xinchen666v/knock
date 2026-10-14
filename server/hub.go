@@ -15,7 +15,7 @@ type routed struct {
 }
 
 type queueState struct {
-	owner *Client // 创建者（投递方）。队列随创建者生灭（M1 语义）
+	owner *Client // 创建者（投递方）
 	sub   *Client // 当前订阅者（接收方）。nil = 还没人订阅
 }
 

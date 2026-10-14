@@ -10,7 +10,7 @@ import (
 
 const (
 	queueTTL   = 7 * 24 * time.Hour
-	sweepEvery = 10 * time.Second
+	sweepEvery = 1 * time.Hour
 	ackGrace   = 24 * time.Hour
 )
 
@@ -44,7 +44,6 @@ func main() {
 
 }
 func sweepLoop(store *Store) {
-	log.Printf("in here")
 	t := time.NewTicker(sweepEvery)
 	defer t.Stop()
 	for range t.C {
