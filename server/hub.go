@@ -121,6 +121,7 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 			from.SendError(500, "storage error")
 			return
 		}
+		h.store.TouchQueue(qid)
 		h.queues[qid] = &queueState{owner: from}
 		// from.SendEnvelope(protocol.TypeNewOk, qid, "",
 		// 	protocol.NewOkMessage{QueueID: qid})
@@ -189,6 +190,7 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 		qs.sub = from                                       //先占位
 		from.SendEnvelope(protocol.TypeSubOk, qid, "", nil) //再应答
 		h.replayOffline(from, qid)                          //传from，不是qs.sub
+		h.store.TouchQueue(qid)
 
 	case protocol.TypeSend:
 		qid := env.QueueID
@@ -255,6 +257,8 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 			return
 		}
 
+		h.store.TouchQueue(qid)
+
 		if qs.sub != nil {
 			qs.sub.SendEnvelope(protocol.TypeDeliver, qid, mid, json.RawMessage(env.Payload))
 			slog.Info("hub: delivered online", "qid", qid[:8]+"...", "mid", mid[:8]+"...")
@@ -264,11 +268,15 @@ func (h *Hub) handle(from *Client, env *protocol.Envelope) {
 		from.SendEnvelope(protocol.TypeAck, qid, mid, protocol.AckMessage{MsgID: mid})
 
 	case protocol.TypeAck:
-		// M1：无持久化，无物可删，仅记录。M2 加SQLite后这里触发 DELETE
-		if err := h.store.MarkDelivered(env.MsgID); err != nil {
-			slog.Error("hub: mark delivered failed", "mid", env.MsgID[:8]+"...", "err", err)
+		// // M1：无持久化，无物可删，仅记录。M2 加SQLite后这里触发 DELETE
+		// if err := h.store.MarkDelivered(env.MsgID); err != nil {
+		// 	slog.Error("hub: mark delivered failed", "mid", env.MsgID[:8]+"...", "err", err)
+		// }
+		// slog.Info("hub: acked", "qid", env.QueueID[:8]+"...", "mid", env.MsgID[:8]+"...")
+		if err := h.store.DeleteMessage(env.MsgID); err != nil { // 替换 MarkDelivered
+		slog.Error("hub: delete delivered failed", "mid", env.MsgID[:8]+"...", "err", err)
 		}
-		slog.Info("hub: acked", "qid", env.QueueID[:8]+"...", "mid", env.MsgID[:8]+"...")
+		slog.Info("hub: acked","qid", env.QueueID[:8]+"...", "mid", env.MsgID[:8]+"...")
 
 	default:
 		from.SendError(protocol.CodeBadRequest, "unknown command: "+env.Type)

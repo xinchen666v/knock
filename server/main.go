@@ -5,6 +5,13 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
+)
+
+const (
+	queueTTL   = 7 * 24 * time.Hour
+	sweepEvery = 10 * time.Second
+	ackGrace   = 24 * time.Hour
 )
 
 func main() {
@@ -28,8 +35,27 @@ func main() {
 		serveWS(hub, w, r)
 	})
 
+	go sweepLoop(store)
+
 	log.Printf("knock server listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server exited: %v", err)
+	}
+
+}
+func sweepLoop(store *Store) {
+	log.Printf("in here")
+	t := time.NewTicker(sweepEvery)
+	defer t.Stop()
+	for range t.C {
+		nq, nm, na, err := store.Sweep(time.Now().Unix(),
+			int64(queueTTL.Seconds()), int64(ackGrace.Seconds()))
+		if err != nil {
+			slog.Error("sweep failed", "err", err)
+			continue
+		}
+		if nq > 0 || nm > 0 {
+			slog.Info("sweep done", "queues", nq, "orphaned_msgs", nm, "acked_residue", na)
+		}
 	}
 }
