@@ -1,0 +1,64 @@
+{
+  "note": "priv is raw 32-byte scalar, clamp is internal; base64 StdEncoding with padding",
+  "vectors": [
+    {
+      "input": {
+        "direction": "a2b",
+        "my_box_priv": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+        "peer_box_pub": "Pry2khSTRNxU5YFgz5C+2e6h3RToHI6R3lV699ev2RU="
+      },
+      "name": "derive_key_a2b",
+      "op": "derive",
+      "output": {
+        "key": "KgPcAkkc5SAKLwEd4xM1rDd3JqU0EAPH2RgPrXDzK1M="
+      }
+    },
+    {
+      "input": {
+        "direction": "b2a",
+        "my_box_priv": "//79/Pv6+fj39vX08/Lx8O/u7ezr6uno5+bl5OPi4eA=",
+        "peer_box_pub": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw="
+      },
+      "name": "derive_key_b2a",
+      "op": "derive",
+      "output": {
+        "key": "fO03UzXWjspOt4EraQmxdZxOFj9xeIgPnMSaaVE68h0="
+      }
+    },
+    {
+      "input": {
+        "aad": "dGVzdC1xdWV1ZS1pZHRlc3QtbXNnLWlk",
+        "key": "KgPcAkkc5SAKLwEd4xM1rDd3JqU0EAPH2RgPrXDzK1M=",
+        "nonce": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYn",
+        "plaintext": "a25vY2sgdGVzdCBwYXlsb2Fk"
+      },
+      "name": "encrypt_roundtrip",
+      "op": "encrypt",
+      "output": {
+        "ciphertext": "7qqCFM6S7VQfW4pC7Qy/aYPGRoIUjaWVcDr7ASF64i19qA=="
+      }
+    },
+    {
+      "input": {
+        "message": "REVMIHFpZD1hYmNkZWYxMjM0NTY3ODkwIHRzPTE3Mjg4ODAwMDA=",
+        "sign_priv": "oaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2+v8ALR4I+cQld1ZvnisJxxXbvOJ+HtkVhqwfPmk680C0gQQ=="
+      },
+      "name": "sign_del",
+      "op": "sign",
+      "output": {
+        "signature": "+2IitOCETcNURDvbeWG553pB5ephgZsVloWCB5+XKLpLuSrP0e1zp4VjV/TXY87E2Xvovq9uHKbFQHqTeVDdDw=="
+      }
+    },
+    {
+      "input": {
+        "box_pub": "Pry2khSTRNxU5YFgz5C+2e6h3RToHI6R3lV699ev2RU="
+      },
+      "name": "fingerprint",
+      "op": "fingerprint",
+      "output": {
+        "fp": "3B 4C E3 9F 64 BE 18 F8"
+      }
+    }
+  ],
+  "version": "knock-m3-v1"
+}

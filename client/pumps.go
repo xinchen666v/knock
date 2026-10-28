@@ -12,11 +12,20 @@ import (
 	"github.com/xinchen666v/knock/protocol"
 )
 
+// 终端输出的两个原子片段。
+// clearLine 回到行首并清空整行，是"重绘"的前提：
+// stdinLoop 和 readPump 谁先画提示符都无所谓，后画的那个会把先画的擦掉重来，
+// 所以屏幕上永远只有一个 "> "，不会出现 "> > "
+const (
+	prompt    = "> "
+	clearLine = "\r\033[K"
+)
+
 // readPump: 网络 → 终端。收到 DELIVER 就打印，PING/PONG 就地处理
 func (s *Session) readPump() {
 	defer func() {
 		s.conn.Close()
-		fmt.Println("\n[链接关闭，回车退出]")
+		fmt.Printf("%s[链接关闭，回车退出]\n", clearLine)
 	}()
 
 	s.conn.SetReadLimit(64 * 1024)
@@ -47,8 +56,9 @@ func (s *Session) readPump() {
 			if err := env.DecodePayload(&chat); err != nil {
 				continue
 			}
-			fmt.Printf("\r\033[K[%s] %s\n> ", s.nick, chat.Text) // \033[K 清掉当前输入行，体验细节
-			fmt.Print("> ")
+			// 一条 Printf 写完"清行 + 消息 + 换行 + 提示符"：
+			// 既只有一次 Write（不会和别的输出交错），也保证只画一个提示符
+			fmt.Printf("%s[%s] %s\n%s", clearLine, s.nick, chat.Text, prompt)
 
 			// ② 签收：必须走 s.send（写泵是唯一合法写者），必须阻塞发送——
 			//    ACK 丢了服务器就永远重投，宁等勿丢
@@ -60,7 +70,7 @@ func (s *Session) readPump() {
 		case protocol.TypeError:
 			var em protocol.ErrorMessage
 			if err := env.DecodePayload(&em); err == nil {
-				fmt.Printf("\r\033[K[错误 %d] %s\n> ", em.Code, em.Message)
+				fmt.Printf("%s[错误 %d] %s\n%s", clearLine, em.Code, em.Message, prompt)
 			}
 		default:
 			// 其他类型忽略
@@ -97,12 +107,11 @@ func (s *Session) writePump() {
 // stdinLoop: 键盘 → 网络。主 goroutine 阻塞在这里
 func (s *Session) stdinLoop() {
 	scanner := bufio.NewScanner(os.Stdin)
-	prompt := "> "
-	fmt.Print(prompt)
+	fmt.Print(clearLine + prompt)
 	for scanner.Scan() {
 		text := strings.TrimSpace(scanner.Text())
 		if text == "" {
-			fmt.Print(prompt)
+			fmt.Print(clearLine + prompt)
 			continue
 		}
 		if text == "/quit" {
@@ -119,6 +128,6 @@ func (s *Session) stdinLoop() {
 				fmt.Println("[发送队列已满，消息被丢弃]")
 			}
 		}
-		fmt.Print(prompt)
+		fmt.Print(clearLine + prompt)
 	}
 }

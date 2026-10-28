@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/xinchen666v/knock/crypto"
+	"github.com/xinchen666v/knock/identity"
 	"github.com/xinchen666v/knock/protocol"
 )
 
@@ -65,6 +67,11 @@ func main() {
 // runNew: 创建一条队列，打印邀请链接后退出。
 // 可选参数指定服务器地址（如 "192.168.1.5:8080"），缺省 localhost:8080
 func runNew(addr string) (string, error) {
+	id, err := loadMyIdentity()
+	if err != nil {
+		return "", err
+	}
+
 	if addr == "" {
 		addr = "localhost:8080"
 	}
@@ -79,13 +86,13 @@ func runNew(addr string) (string, error) {
 	}
 	defer conn.Close()
 
-	s := &Session{conn: conn, send: make(chan []byte, 16)}
+	s := &Session{conn: conn, send: make(chan []byte, 16), id: id}
 
-	qid, err := protocol.NewID()
-	if err != nil {
-		return "", err
-	}
-	env, _ := protocol.NewEnvelope(protocol.TypeNew, qid, "", nil)
+	// qid, err := protocol.NewID()
+	// if err != nil {
+	// 	return "", err
+	// }
+	env, _ := protocol.NewEnvelope(protocol.TypeNew, "", "", nil)
 	resp, err := s.request(env, protocol.TypeNewOk)
 	if err != nil {
 		return "", err
@@ -94,7 +101,12 @@ func runNew(addr string) (string, error) {
 	resp.DecodePayload(&okMsg)
 
 	// out := &protocol.Invite{Host: hostOf(addr), Port: portOf(addr), QueueID: okMsg.QueueID}
-	out := &protocol.Invite{Host: host, Port: port, QueueID: okMsg.QueueID}
+	out := &protocol.Invite{
+		Host:    host,
+		Port:    port,
+		QueueID: okMsg.QueueID,
+		BoxPub:  id.BoxPub,
+	}
 	return out.String(), nil
 }
 
@@ -113,4 +125,21 @@ func usage() {
   knock chat -server my-tunnel.trycloudflare.com
   knock chat knock://my-tunnel.trycloudflare.com/abcd1234
 `)
+}
+
+// client/main.go 或 session.go
+func loadMyIdentity() (*crypto.Identity, error) {
+	path, err := identity.DefaultPath()
+	if err != nil {
+		return nil, fmt.Errorf("定位身份文件失败: %w", err)
+	}
+	id, created, err := identity.LoadOrCreate(path)
+	if err != nil {
+		return nil, err
+	}
+	if created {
+		fmt.Println("（首次运行，已生成身份:", path, "）")
+	}
+	// fmt.Println("你的指纹:", crypto.Fingerprint(id.BoxPub))
+	return id, nil
 }

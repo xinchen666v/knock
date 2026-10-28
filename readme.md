@@ -264,3 +264,100 @@ M2 留给 E2E 加密阶段的接口与债：
 
 ## 关于TTL
 TTL 过期 = 队列及全部未签收消息不可逆销毁
+
+
+# M3.1 — 身份与状态持久化
+## 本期目标
+让 knock 从“一次性演示工具”变成“能日常用的客户端”：重启不换身份、重连不掉链接、聊天对象自动记住。这期解决的是三件事：
+
+1. 我是谁 —— 身份密钥对的生成与落盘，跨重启不变；
+2. 我的门牌号 —— 队列（outbox）按服务器持久化，邀请链接跨重启稳定，对方手里的链接永远有效；
+3. 我的通讯录 —— 聊过的对象按指纹记录，重连时回车即达，无需重新粘贴链接。
+
+## 功能清单
+### 身份（Identity）
+- 首次运行自动生成 X25519 密钥对，落盘 %AppData%\knock\identity.json
+- 每次启动打印自己的指纹（81 69 D1 27 ... 格式），供双方人工比对
+- 支持 KNOCK_IDENTITY 环境变量指定身份文件 → 一台机器可开多个身份（A/B 测试、多账号）
+
+### 队列状态（Outbox State）
+- 自己的 outbox qid 按服务器地址记录在 state-<指纹前8位>.json
+- state 文件按身份指纹分家——不同身份各自独立，互不污染
+- outbox 优先级：-queue 参数 > 状态文件 > 新建（NEW）
+- 复用时不发 NEW，服务器日志零 NEW 直达 SUB
+- 落盘采用临时文件 + rename 原子写，进程被杀不会留下半截文件
+
+### 通讯录（Contacts）
+- 对方（按其 boxPub 指纹锚定，与服务器无关）自动记入联系人列表，存原始邀请链接
+- SUB 成功才入册，坏链接/不可达服务器不会污染通讯录
+- 重连时的三分支交互：
+```bash
+联系人列表:
+  [1] - (d7be6dba)  上次: 10-28 11:40
+回车=继续上次 [1]，序号=选人，粘贴新链接=新联系人:
+
+```
+- 旧版 state 文件（无 contacts 字段）自动兼容，加载后补齐 nil map，不 panic
+
+- 使用
+```bash
+# 终端A（服务器）
+go run ./server
+
+# 终端B（用户A）
+$env:KNOCK_IDENTITY="$env:TEMP\knockA.json"; go run ./client chat
+# → 打印邀请链接，发给对方
+
+# 终端C（用户B）
+$env:KNOCK_IDENTITY="$env:TEMP\knockB.json"; go run ./client chat
+# → 粘贴 A 的链接，双向加密聊天
+
+```
+之后任意一端 /quit 再重连：联系人列表回车即达，无需重新交换链接。
+
+### 数据文件位置
+|文件|	路径|	内容|
+| - | - | - |
+|身份|	%AppData%\knock\identity.json（或 KNOCK_IDENTITY）|	密钥对|
+|状态|	%AppData%\knock\state-<指纹前8位>.json	|outbox 映射 + 联系人|
+
+```json
+{
+  "outbox":   { "localhost": "d7be6dba9a5a1c52767c22789355af8d" },
+  "contacts": {
+    "aabbccdd00112233...": {
+      "fingerprint": "aabbccdd00112233...",
+      "invite_url":  "knock://localhost:8080/v2/...?k=...&c=...",
+      "last_seen":   1769612400,
+      "alias":       ""
+    }
+  }
+}
+
+```
+### 测试
+```bash
+go test ./client -v
+
+```
+覆盖 9 项：按身份分文件（撞车回归）、无文件首启、旧格式文件兼容（nil map 防御）、序列化往返（含中文）、二次保存覆盖 + 无 .tmp 残留、AB 身份隔离回归、upsert 语义、联系人排序过滤、JSON 字段名锁定（防 tag 改动破坏兼容）。
+
+#### 验收记录（2026-10-28）
+服务端日志关键证据：
+
+- 全会话零 NEW：客户端重启 × 4、服务端冷启动 × 1，所有连接 SUB 直达 queue revived from db
+- 双向消息全部 delivered online，每条紧跟同 mid 的 ACK，零悬空消息
+- 重连间隔（SUB 距连接）从首次 15 秒降到 2~9 秒——粘贴操作消失，只剩回车
+- 单测 9/9 PASS。
+
+### 本期踩坑记录（给未来的自己）
+1. AB 链接一模一样：KNOCK_IDENTITY 未生效 → 两边加载同一份身份 → 同指纹 → 同 state 文件 → 复用同一队列。教训：多身份是新维度，身份→状态→链接是严格因果链。
+2. loadState(id) 的 id 从哪来：身份必须先于 state 加载，因为 state 文件名就是指纹。
+3. 旧 state 文件 nil map panic：结构体加字段后，json.Decode 对旧文件产出 nil map，写入即崩——加载处必须补防御。
+4. 重连与多联系人不能用同一个 map key：自己的队列锚点是服务器（host），对方锚点是指纹，两套 key 各管各的。
+### 已知限制 / 下期账
+- 明文消息体：SEND payload 尚未端到端加密（M3.2 密钥协商，链接里的 k 参数和 Session.id.BoxPub 已为派生留好接口）
+- TOFU 无验证标记：联系人信任仅基于首次粘贴，无指纹人工比对记录（Contact 已预留 Verified 字段位）
+- 无消息历史：离线补投由服务器兜底，客户端本地不存聊天记录
+服务端 owner left 日志从未触发，待确认为死分支还是判定 bug（五分钟小事）
+- 单联系人选择已支持，/name 起别名命令待加（Alias 字段已就位）
